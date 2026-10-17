@@ -1,0 +1,51 @@
+# XAI-ChestDiag experiment configuration
+# Paths -----------------------------------------------------------------
+data:
+  # Folder that contains the NIH ChestX-ray14 images (searched recursively,
+  # so the original images_001 ... images_012 sub-folders are fine).
+  image_root: data/nih/images
+  labels_csv: data/nih/Data_Entry_2017.csv
+  bbox_csv: data/nih/BBox_List_2017.csv
+  split_dir: outputs/splits
+
+split:
+  train: 0.70
+  val: 0.10
+  test: 0.20
+  seed: 42
+
+preprocessing:
+  image_size: 224
+  # After min-max scaling to [0, 1], standardise with ImageNet statistics
+  # (required because the backbones are ImageNet-pretrained).
+  imagenet_normalize: true
+
+augmentation:          # applied to the training set only
+  rotation_deg: 10
+  hflip_p: 0.5
+  zoom: 0.10
+  clahe_p: 0.5
+  clahe_clip_limit: 2.0
+  clahe_tile_grid: 8
+
+training:
+  batch_size: 64
+  epochs: 50
+  lr: 1.0e-4
+  betas: [0.9, 0.999]
+  weight_decay: 0.0
+  dropout: 0.3
+  lr_factor: 0.5
+  lr_patience: 3
+  early_stopping_patience: 7
+  num_workers: 8
+  amp: true            # mixed precision on CUDA
+  pretrained: true     # ImageNet weights
+
+evaluation:
+  threshold: 0.5       # decision threshold on P(abnormal)
+  bootstrap_iters: 2000
+
+models: [densenet121, vgg16, inception_v3, efficientnet_b4]
+
+output_dir: outputs
