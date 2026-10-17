@@ -52,6 +52,10 @@ python -m src.resize_cache --src data/nih/images --dst data/nih/images_256 --siz
 
 ## 3. Run the full experiment
 
+**No local GPU?** Use the ready-made Kaggle notebook [`notebooks/kaggle_xai_chestdiag.ipynb`](notebooks/kaggle_xai_chestdiag.ipynb): the NIH dataset is already hosted on Kaggle and a free T4/P100 GPU is provided. Instructions are in the first cell.
+
+**Local GPU:**
+
 ```bash
 python scripts/run_all.py --seeds 42 43 44
 ```
@@ -82,6 +86,7 @@ All hyper-parameters are in [`configs/default.yaml`](configs/default.yaml).
 | `outputs/summary/multi_seed_mean_sd.csv` | Mean ± SD over seeds |
 | `outputs/summary/throughput.json` | Parameters and images/s |
 | `outputs/densenet121/seed<k>/pointing_game*.{json,csv}` | Pointing Game accuracy (overall, per finding, centre baseline) |
+| `figures/figure1_workflow.{png,pdf}` (`python figures/make_figure1.py`) | Figure 1, framework workflow |
 | `outputs/figures/fig_confusion_matrix.{png,pdf}` | Confusion matrix figure |
 | `outputs/figures/fig_roc_curves.{png,pdf}` | ROC curves of all models |
 | `outputs/figures/fig_training_curves.{png,pdf}` | Loss / accuracy curves |
