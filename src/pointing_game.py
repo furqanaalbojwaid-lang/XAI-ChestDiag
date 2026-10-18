@@ -2,7 +2,7 @@
 
 A "hit" is recorded when the maximum of the Grad-CAM heat-map falls inside a
 radiologist bounding box (NIH BBox_List_2017.csv, coordinates in original
-pixel space), optionally with a tolerance margin (default 15 px, as in the
+pixel space of the 1024x1024 PNGs), optionally with a tolerance margin (default 15 px, as in the
 original Pointing Game protocol).
 
 By default ONLY bounding-box images that belong to the held-out TEST patients
@@ -50,13 +50,11 @@ def main():
     run_dir = f"{cfg['output_dir']}/{args.model}/seed{args.seed}"
 
     splits = pd.read_csv(f"{cfg['data']['split_dir']}/all_splits.csv")
-    meta = pd.read_csv(cfg["data"]["labels_csv"]).rename(columns={"Image Index": "image"})
-    wcol = [c for c in meta.columns if c.startswith("OriginalImage[Width")][0]
-    hcol = [c for c in meta.columns if c.startswith("Height]")][0]
-    meta = meta[["image", wcol, hcol]].rename(columns={wcol: "W", hcol: "H"})
-
     boxes = load_bboxes(cfg["data"]["bbox_csv"]).merge(splits[["image", "split"]], on="image", how="left")
-    boxes = boxes.merge(meta, on="image", how="left")
+    # NIH bounding boxes are given in the pixel space of the released 1024x1024 PNGs
+    # (NOT the original scan size stored in Data_Entry_2017.csv).
+    ref = float(cfg["data"].get("bbox_image_size", 1024))
+    boxes["W"], boxes["H"] = ref, ref
     n_all = boxes.image.nunique()
     if not args.include_non_test:
         boxes = boxes[boxes.split == "test"]

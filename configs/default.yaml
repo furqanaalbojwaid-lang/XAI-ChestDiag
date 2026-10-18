@@ -6,6 +6,7 @@ data:
   image_root: data/nih/images
   labels_csv: data/nih/Data_Entry_2017.csv
   bbox_csv: data/nih/BBox_List_2017.csv
+  bbox_image_size: 1024   # bbox coordinates refer to the 1024x1024 PNGs
   split_dir: outputs/splits
 
 split:
