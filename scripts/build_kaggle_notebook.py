@@ -129,6 +129,77 @@ def build(models, out_name, keep_cache):
     print("wrote", out_name, len(cells), "cells")
 
 
+GATHER = """import zipfile
+print('--- /kaggle/input tree (depth 4) ---')
+for root, dirs, files in os.walk('/kaggle/input', followlinks=True):
+    depth = root.count('/') - 2
+    if depth <= 4:
+        print(root, len(files), 'files', [f for f in files if not f.endswith('.png')][:8])
+    if 'images' in os.path.basename(root) or depth > 6:
+        dirs[:] = []
+found = 0
+for root, dirs, files in os.walk('/kaggle/input', followlinks=True):
+    if os.path.basename(root).startswith('images'):
+        dirs[:] = []; continue
+    if 'test_metrics.json' in files:
+        model, seed = root.split('/')[-2], root.split('/')[-1]
+        dst = f'outputs/{model}/{seed}'
+        if not os.path.exists(dst):
+            shutil.copytree(root, dst); print('imported', model, seed); found += 1
+    if 'throughput.json' in files and not os.path.exists('outputs/summary/throughput.json'):
+        os.makedirs('outputs/summary', exist_ok=True); shutil.copy(os.path.join(root, 'throughput.json'), 'outputs/summary/')
+    for f in files:
+        if f.endswith('.zip'):
+            z = zipfile.ZipFile(os.path.join(root, f))
+            for n in z.namelist():
+                if '/outputs/' in n and '/seed' in n and not n.endswith('/'):
+                    rel = n[n.index('outputs/'):]
+                    if not os.path.exists(rel):
+                        os.makedirs(os.path.dirname(rel), exist_ok=True)
+                        with z.open(n) as src, open(rel, 'wb') as dst: shutil.copyfileobj(src, dst)
+                        print('extracted', rel); found += 1
+print(found, 'items imported'); print(sorted(glob.glob('outputs/*/seed*/*')))"""
+
+COMBINE_CONFIG = """import glob, yaml, os, shutil
+hits = glob.glob('/kaggle/input/**/Data_Entry_2017.csv', recursive=True)
+NIH = os.path.dirname(sorted(hits, key=len)[0]); print('NIH dataset at', NIH)
+bbox = glob.glob(os.path.join(NIH, '**/BBox_List_2017.csv'), recursive=True)[0]
+cfg = yaml.safe_load(open('configs/default.yaml'))
+cfg['data'].update(image_root=NIH, labels_csv=os.path.join(NIH, 'Data_Entry_2017.csv'), bbox_csv=bbox,
+                   split_dir='outputs/splits')
+cfg['training']['num_workers'] = os.cpu_count()
+cfg['models'] = ['densenet121', 'vgg16', 'inception_v3', 'efficientnet_b4']
+yaml.safe_dump(cfg, open('configs/kaggle.yaml', 'w'), sort_keys=False)"""
+
+COMBINE_FINAL = """!python -m src.prepare_splits --config configs/kaggle.yaml
+!python -m src.compare --config configs/kaggle.yaml --seed 42
+!python -m src.pointing_game --config configs/kaggle.yaml --model densenet121 --seed 42
+!python -m src.gradcam_figure --config configs/kaggle.yaml --model densenet121 --seed 42 --findings Pneumonia Infiltration Effusion Consolidation
+!python -m src.plots --config configs/kaggle.yaml --seed 42
+!zip -qr results_final.zip outputs -x '*.pt'
+!cp -r outputs /kaggle/working/final_outputs && find /kaggle/working/final_outputs -name '*.pt' -delete
+from IPython.display import Image, display
+for f in sorted(glob.glob('outputs/figures/*.png')): print(f); display(Image(f, width=600))"""
+
+
+def build_combine(out_name="kaggle_combine.ipynb"):
+    cells = [md("# XAI-ChestDiag - combine Run 1 + Run 2 (CPU is enough)\n\nInputs: NIH Chest X-rays, XAI-ChestDiag Run1, XAI-ChestDiag Run2.\n"),
+             code("import os\nos.makedirs('/kaggle/working/XAI-ChestDiag/src', exist_ok=True)\n"
+                  "os.makedirs('/kaggle/working/XAI-ChestDiag/configs', exist_ok=True)\n"
+                  "os.chdir('/kaggle/working/XAI-ChestDiag')")]
+    for f in sorted(glob.glob(str(ROOT / "src/*.py"))) + [str(ROOT / "configs/default.yaml")]:
+        rel = Path(f).relative_to(ROOT).as_posix()
+        body = open(f).read()
+        if body.strip():
+            cells.append(code(f"%%writefile {rel}\n" + body))
+    cells += [code("open('src/__init__.py','w').close()"), code(COMBINE_CONFIG), code(GATHER), code(COMBINE_FINAL)]
+    nb = {"cells": cells, "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+                                       "language_info": {"name": "python"}}, "nbformat": 4, "nbformat_minor": 5}
+    json.dump(nb, open(ROOT / "notebooks" / out_name, "w"), indent=1)
+    print("wrote", out_name, len(cells), "cells")
+
+
 if __name__ == "__main__":
     build(["densenet121", "efficientnet_b4"], "kaggle_xai_chestdiag.ipynb", keep_cache=True)
     build(["vgg16", "inception_v3"], "kaggle_run2.ipynb", keep_cache=False)
+    build_combine()
