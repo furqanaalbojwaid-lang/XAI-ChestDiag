@@ -1,0 +1,16 @@
+# A5: A4 + DenseNet121 initialised from chest-X-ray weights (TorchXRayVision
+# 'densenet121-res224-chex', trained on CheXpert only -> no NIH images, no leakage)
+name: a5_xrv_384
+init: xrv_chex
+multitask: true
+attention: cbam
+recipe: modern
+image_size: 384
+batch_size: 32
+lr: 1.0e-4
+weight_decay: 1.0e-4
+warmup_epochs: 1
+epochs: 15
+ema_decay: 0.999
+select: val_auc
+patience: 5

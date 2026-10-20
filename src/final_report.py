@@ -32,7 +32,45 @@ from .stats import delong_test
 LABEL = {"densenet121": "DenseNet121 (baseline)", "vgg16": "VGG16", "inception_v3": "InceptionV3",
          "efficientnet_b4": "EfficientNet-B4", "a1_multitask": "+ Multi-task head",
          "a2_mt_cbam": "+ Multi-task + CBAM", "a3_mt_cbam_modern": "+ Modern training recipe",
-         "a4_full_384": "+ 384 px input (full XAI-ChestDiag)"}
+         "a4_full_384": "+ 384 px input (full XAI-ChestDiag)",
+         "a5_xrv_384": "+ Chest-X-ray pre-training (CheXpert init)"}
+
+# Ensembles are fixed IN ADVANCE (no member selection on the test set): equal-weight mean
+# of the member probabilities (TTA predictions used where available).
+ENSEMBLES = {"XAI-ChestDiag-Ens (proposed variants)": ["a3_mt_cbam_modern", "a4_full_384", "a5_xrv_384"],
+             "Ens (all models)": ["a3_mt_cbam_modern", "a4_full_384", "a5_xrv_384",
+                                  "densenet121", "vgg16", "inception_v3", "efficientnet_b4"]}
+
+
+def ensemble_eval(root, members, seed, ec_thr=0.5, n_boot=2000):
+    from .stats import binary_metrics, bootstrap_ci, delong_auc_ci
+    rs = [(m, load_run(root, m, seed, tta=True)) for m in members]
+    rs = [(m, r) for m, r in rs if r is not None]
+    if len(rs) < 2:
+        return None
+    idx = rs[0][1]["pred"].index
+    y = rs[0][1]["pred"].label.values
+    prob = np.mean([r["pred"].loc[idx].prob.values for _, r in rs], axis=0)
+    m = binary_metrics(y, prob, ec_thr)
+    auc, (lo, hi), _ = delong_auc_ci(y, prob)
+    m["auc_ci95_delong"] = [lo, hi]
+    m["ci95_bootstrap"] = bootstrap_ci(y, prob, ec_thr, n_boot, seed=seed)
+    # Youden threshold from VALIDATION predictions, only if every member saved them
+    vfiles = [r["dir"] / ("val_predictions_tta.csv" if r["tta"] else "val_predictions.csv") for _, r in rs]
+    if all(f.exists() for f in vfiles):
+        from sklearn.metrics import roc_curve as _rc
+        vs = [pd.read_csv(f).set_index("image") for f in vfiles]
+        vy = vs[0].label.values
+        vp = np.mean([v.loc[vs[0].index].prob.values for v in vs], axis=0)
+        fpr, tpr, thr = _rc(vy, vp)
+        t = float(thr[np.argmax(tpr - fpr)])
+        m["youden"] = {**binary_metrics(y, prob, t), "ci95_bootstrap": bootstrap_ci(y, prob, t, n_boot, seed=seed),
+                       "threshold_chosen_on": "validation"}
+    m["parameters"] = sum(r["metrics"]["parameters"] for _, r in rs)
+    m["image_size"] = "/".join(str(r["metrics"].get("image_size", 224)) for _, r in rs)
+    pred = rs[0][1]["pred"].loc[idx][["label"]].copy()
+    pred["prob"] = prob
+    return dict(metrics=m, pred=pred, dir=None, tta=any(r["tta"] for _, r in rs), members=[mm for mm, _ in rs])
 
 
 def load_run(root: Path, run: str, seed: int, tta: bool):
@@ -64,7 +102,7 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--baselines", nargs="+", default=["densenet121", "vgg16", "inception_v3", "efficientnet_b4"])
     ap.add_argument("--ablation", nargs="+", default=["densenet121", "a1_multitask", "a2_mt_cbam",
-                                                       "a3_mt_cbam_modern", "a4_full_384"])
+                                                       "a3_mt_cbam_modern", "a4_full_384", "a5_xrv_384"])
     ap.add_argument("--final", default="a4_full_384")
     args = ap.parse_args()
     cfg = load_config(args.config)
@@ -118,11 +156,39 @@ def main():
         pd.DataFrame(tests).to_csv(out / "delong_final.csv", index=False)
         print("\nDELONG\n" + pd.DataFrame(tests).to_string(index=False))
 
+        # ---------------- pre-specified ensembles
+        ens_rows, ens_tests = [], []
+        for name, members in ENSEMBLES.items():
+            e = ensemble_eval(root, members, args.seed)
+            if e is None:
+                print("[skip ensemble]", name); continue
+            ens_rows.append({**row(name, e), "Model": f"{name} [{', '.join(e['members'])}]"})
+            if "youden" in e["metrics"]:
+                ens_rows.append({**row(name, e, use_youden=True), "Model": f"{name}, Youden thr."})
+            p = e["pred"].loc[ref.index]
+            t = delong_test(ref.label.values, p.prob.values, ref.prob.values)
+            ens_tests.append(dict(comparison=f"{name} vs XAI-ChestDiag (single)", auc_ens=t["auc_a"],
+                                  auc_single=t["auc_b"], delta_auc=t["auc_diff"], z=t["z"], p_value=t["p_value"]))
+            for run in ["densenet121"]:
+                r = load_run(root, run, args.seed, tta=False)
+                if r is not None:
+                    t = delong_test(ref.label.values, p.prob.values, r["pred"].loc[ref.index].prob.values)
+                    ens_tests.append(dict(comparison=f"{name} vs {LABEL[run]}", auc_ens=t["auc_a"],
+                                          auc_single=t["auc_b"], delta_auc=t["auc_diff"], z=t["z"], p_value=t["p_value"]))
+            if name.startswith("XAI-ChestDiag-Ens"):
+                preds[name] = e["pred"]
+        if ens_rows:
+            pd.DataFrame(ens_rows).to_csv(out / "ensemble_table.csv", index=False)
+            pd.DataFrame(ens_tests).to_csv(out / "delong_ensemble.csv", index=False)
+            print("\nENSEMBLES\n" + pd.DataFrame(ens_rows).to_string(index=False))
+            print("\nDELONG (ensembles)\n" + pd.DataFrame(ens_tests).to_string(index=False))
+
         # ---------------- figures
         fig, ax = plt.subplots(figsize=(5.4, 4.8))
-        colors = ["#7F8C8D", "#2E86C1", "#28B463", "#8E44AD", "#C0392B"]
-        for (lab, p), c in zip([(k, v) for k, v in preds.items() if "proposed" not in k] +
-                               [("XAI-ChestDiag (proposed)", preds["XAI-ChestDiag (proposed)"])], colors):
+        colors = ["#7F8C8D", "#2E86C1", "#28B463", "#8E44AD", "#E67E22", "#C0392B"]
+        main = "XAI-ChestDiag (proposed)"
+        order = [(k, v) for k, v in preds.items() if k != main] + [(main, preds[main])]
+        for (lab, p), c in zip(order, colors[-len(order):] if len(order) < len(colors) else colors):
             fpr, tpr, _ = roc_curve(p.label, p.prob)
             from sklearn.metrics import roc_auc_score
             ax.plot(fpr, tpr, lw=2.2 if "proposed" in lab else 1.3, color=c,

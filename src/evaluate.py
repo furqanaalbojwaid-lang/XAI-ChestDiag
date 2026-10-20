@@ -89,6 +89,9 @@ def main():
     prob = predict_df(model, test_df, index, size, norm, bs, nw, device, args.tta)
 
     suffix = "_tta" if args.tta else ""
+    vo = val_df[["image", "label"]].copy()
+    vo["prob"] = pv
+    vo.to_csv(f"{run_dir}/val_predictions{suffix}.csv", index=False)
     out = test_df[["image", "patient_id", "findings", "label"]].copy()
     out["prob"] = prob
     out.to_csv(f"{run_dir}/test_predictions{suffix}.csv", index=False)

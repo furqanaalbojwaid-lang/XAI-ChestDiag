@@ -266,7 +266,7 @@ def build_cache(resize, out_name):
     print("wrote", out_name, len(cells), "cells")
 
 
-def build_ablation(variants, resize, out_name, tta_for=()):
+def build_ablation(variants, resize, out_name, tta_for=(), pre=()):
     train = "for v in VARIANTS:\n" \
             "    !python -m src.train_proposed --config configs/kaggle.yaml --variant configs/ablation/{v}.yaml --seed 42\n" \
             "    !python -m src.evaluate --config configs/kaggle.yaml --model {v} --seed 42\n" \
@@ -280,7 +280,7 @@ def build_ablation(variants, resize, out_name, tta_for=()):
                   "os.chdir('/kaggle/working/XAI-ChestDiag')")]
     cells += write_code_cells()
     cells += [code("open('src/__init__.py','w').close()"), code(CONFIG.replace("prev = [", "prev = [] and [")),
-              code(ABL_SANITY), code(CACHE_FROM_INPUT), code(RESIZE_CELL),
+              code(ABL_SANITY)] + [code(c) for c in pre] + [code(CACHE_FROM_INPUT), code(RESIZE_CELL),
               code("!python -m src.prepare_splits --config configs/kaggle.yaml"),
               code(train),
               code("!cd outputs && zip -qr ../results.zip . -x '*.pt'\n!rm -rf /kaggle/working/images_*\n!ls -la outputs/*/seed42")]
@@ -290,12 +290,26 @@ def build_ablation(variants, resize, out_name, tta_for=()):
     print("wrote", out_name, len(cells), "cells")
 
 
+XRV_SETUP = """!pip install -q torchxrayvision
+# fail fast: chest-X-ray weights must download and load into our DenseNet121 (CheXpert-only weights)
+import sys; sys.path.insert(0, '.')
+from src.proposed import XAIChestNet
+import torch
+m = XAIChestNet(pretrained=True, attention='cbam', multitask=True, init='xrv_chex')
+print(m(torch.zeros(2, 3, 384, 384)).shape)"""
+
+
 FINAL_STEPS = """!python -m src.prepare_splits --config configs/kaggle.yaml
-!python -m src.final_report --config configs/kaggle.yaml --final a4_full_384
-for run in ['a4_full_384', 'densenet121']:
+# final single model = the variant with the best VALIDATION AUC (the test set is not used for this choice)
+import json
+cands = [r for r in ['a4_full_384', 'a5_xrv_384'] if os.path.exists(f'outputs/{r}/seed42/train_info.json')]
+FINAL = max(cands, key=lambda r: json.load(open(f'outputs/{r}/seed42/train_info.json'))['best_score'])
+print('validation AUC:', {r: json.load(open(f'outputs/{r}/seed42/train_info.json'))['best_score'] for r in cands}, '-> FINAL =', FINAL)
+!python -m src.final_report --config configs/kaggle.yaml --final {FINAL}
+for run in [FINAL, 'densenet121']:
     if os.path.exists(f'outputs/{run}/seed42/best.pt'):
         !python -m src.pointing_game --config configs/kaggle.yaml --model {run} --seed 42
-!python -m src.gradcam_figure --config configs/kaggle.yaml --model a4_full_384 --seed 42 --findings Pneumonia Infiltration Effusion Consolidation
+!python -m src.gradcam_figure --config configs/kaggle.yaml --model {FINAL} --seed 42 --findings Pneumonia Infiltration Effusion Consolidation
 !cp -r outputs /kaggle/working/final_outputs && find /kaggle/working/final_outputs -name '*.pt' -delete
 !cd /kaggle/working && zip -qr final_results.zip final_outputs
 from IPython.display import Image, display
@@ -303,7 +317,7 @@ for f in sorted(glob.glob('outputs/figures/*.png')): print(f); display(Image(f, 
 
 
 def build_final(out_name="kaggle_final.ipynb"):
-    cells = [md("# XAI-ChestDiag - final report (CPU)\n\nInputs: NIH Chest X-rays, Run1, Run2, Ablation A, Ablation B.\n"),
+    cells = [md("# XAI-ChestDiag - final report (CPU)\n\nInputs: NIH Chest X-rays, Run1, Run2, Ablation A, Ablation B, Ablation C.\n"),
              code("import os\nos.makedirs('/kaggle/working/XAI-ChestDiag/src', exist_ok=True)\n"
                   "os.makedirs('/kaggle/working/XAI-ChestDiag/configs/ablation', exist_ok=True)\n"
                   "os.chdir('/kaggle/working/XAI-ChestDiag')")]
@@ -321,5 +335,6 @@ if __name__ == "__main__":
     build_combine()
     build_ablation(["a1_multitask", "a2_mt_cbam", "a3_mt_cbam_modern"], 256, "kaggle_ablation_A.ipynb")
     build_ablation(["a4_full_384"], 384, "kaggle_ablation_B.ipynb", tta_for=["a4_full_384"])
+    build_ablation(["a5_xrv_384"], 384, "kaggle_ablation_C.ipynb", tta_for=["a5_xrv_384"], pre=[XRV_SETUP])
     build_final()
     build_cache(384, "kaggle_cache_384.ipynb")

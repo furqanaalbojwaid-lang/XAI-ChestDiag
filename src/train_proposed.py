@@ -33,6 +33,7 @@ DEFAULT_VARIANT = dict(
     batch_size=64, lr=1e-4, weight_decay=0.0, epochs=50, patience=7,
     warmup_epochs=1, ema_decay=0.999, select="val_loss", dropout=0.3,
     fast_data=True,             # preload images to RAM + GPU augmentation (CLAHE fixed per image)
+    init="imagenet",            # or "xrv_chex": chest-X-ray pre-trained DenseNet121 (CheXpert only)
 )
 
 
@@ -139,8 +140,8 @@ def main():
         va_dl = DataLoader(va_ds, batch_size=v["batch_size"], shuffle=False, num_workers=nw, pin_memory=True)
 
     model = XAIChestNet(pretrained=True, attention=v["attention"], multitask=v["multitask"],
-                        dropout=v["dropout"]).to(device)
-    print(f"{v['name']}: {count_parameters(model) / 1e6:.2f} M params | attention={v['attention']} "
+                        dropout=v["dropout"], init=v["init"]).to(device)
+    print(f"{v['name']}: {count_parameters(model) / 1e6:.2f} M params | init={v['init']} | attention={v['attention']} "
           f"multitask={v['multitask']} recipe={v['recipe']} size={v['image_size']} | device={device}")
 
     epochs = args.max_epochs or v["epochs"]

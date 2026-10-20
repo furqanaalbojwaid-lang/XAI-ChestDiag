@@ -64,20 +64,44 @@ class CBAM(nn.Module):
         return self.sa(self.ca(x))
 
 
+def load_xrv_features(features: nn.Module, weights: str = "densenet121-res224-chex"):
+    """Copy the DenseNet121 feature extractor of a TorchXRayVision model pre-trained on
+    chest X-rays. The default 'chex' weights were trained on CheXpert ONLY (no NIH images),
+    so there is no leakage into the NIH test split."""
+    import torchxrayvision as xrv
+    src = xrv.models.DenseNet(weights=weights).features.state_dict()
+    missing, unexpected = features.load_state_dict(src, strict=False)
+    print(f"xrv init ({weights}): {len(src)} tensors, missing={len(missing)}, unexpected={len(unexpected)}")
+    assert not missing, missing[:5]
+
+
 class XAIChestNet(nn.Module):
+    """init: 'imagenet' (3-channel, ImageNet weights) or 'xrv_chex' (1-channel, chest-X-ray
+    weights from TorchXRayVision; input is converted internally to the [-1024, 1024] range)."""
+
     def __init__(self, pretrained: bool = True, attention: str = "none", multitask: bool = False,
-                 dropout: float = 0.3, n_aux: int = len(LABELS14)):
+                 dropout: float = 0.3, n_aux: int = len(LABELS14), init: str = "imagenet"):
         super().__init__()
-        m = models.densenet121(weights=models.DenseNet121_Weights.IMAGENET1K_V1 if pretrained else None)
+        xrv_init = init.startswith("xrv")
+        m = models.densenet121(weights=models.DenseNet121_Weights.IMAGENET1K_V1 if pretrained and not xrv_init else None)
+        if xrv_init:
+            m.features.conv0 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+            if pretrained:
+                load_xrv_features(m.features)
         self.features = m.features            # ends with norm5 (BatchNorm) -> 1024 x H/32 x W/32
         c = m.classifier.in_features
         self.attn = CBAM(c) if attention == "cbam" else nn.Identity()
         self.dropout = nn.Dropout(dropout)
         self.fc = nn.Linear(c, 1)
         self.aux = nn.Linear(c, n_aux) if multitask else None
-        self.attention, self.multitask = attention, multitask
+        self.attention, self.multitask, self.init = attention, multitask, init
+        self.xrv_input = xrv_init
 
     def embed(self, x):
+        if self.xrv_input:
+            # pipeline gives gray repeated x3 with ImageNet normalisation; undo on channel 0
+            # (mean 0.485, std 0.229) -> [0, 1] -> TorchXRayVision range [-1024, 1024]
+            x = (x[:, :1] * 0.229 + 0.485) * 2048.0 - 1024.0
         f = self.attn(F.relu(self.features(x)))
         return torch.flatten(F.adaptive_avg_pool2d(f, 1), 1)
 
@@ -92,7 +116,8 @@ class XAIChestNet(nn.Module):
 # ------------------------------------------------------------------ loading helpers
 def build_from_run_config(rc: dict, pretrained: bool = False) -> nn.Module:
     return XAIChestNet(pretrained=pretrained, attention=rc.get("attention", "none"),
-                       multitask=rc.get("multitask", False), dropout=rc.get("dropout", 0.3))
+                       multitask=rc.get("multitask", False), dropout=rc.get("dropout", 0.3),
+                       init=rc.get("init", "imagenet"))
 
 
 def load_trained(run_dir: str, name: str, device, dropout: float = 0.3):
