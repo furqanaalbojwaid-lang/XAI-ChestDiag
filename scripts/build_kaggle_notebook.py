@@ -256,7 +256,7 @@ def build_cache(resize, out_name):
              code("open('src/__init__.py','w').close()\nimport glob\n"
                   "hits = glob.glob('/kaggle/input/**/Data_Entry_2017.csv', recursive=True)\n"
                   "NIH = os.path.dirname(sorted(hits, key=len)[0]); IMG = f'/tmp/images_{RESIZE}'\nprint(NIH)"),
-             code("!python -m src.resize_cache --src {NIH} --dst {IMG} --size {RESIZE} --workers {os.cpu_count()}"),
+             code("!python -m src.resize_cache --src {NIH} --dst {IMG} --size {RESIZE} --threads 64"),
              code("import zipfile\nn = 0\nwith zipfile.ZipFile(f'/kaggle/working/images_{RESIZE}.zip', 'w', zipfile.ZIP_STORED) as z:\n"
                   "    for f in sorted(os.listdir(IMG)):\n        z.write(os.path.join(IMG, f), f'images_{RESIZE}/{f}'); n += 1\n"
                   "print(n, 'images zipped')\n!ls -la /kaggle/working")]

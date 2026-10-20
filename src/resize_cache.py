@@ -11,7 +11,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+import time
 from pathlib import Path
 
 import cv2
@@ -31,15 +32,18 @@ def main():
     ap.add_argument("--dst", required=True)
     ap.add_argument("--size", type=int, default=256)
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--threads", type=int, default=0, help="use N threads instead of processes (I/O-bound mounts)")
     a = ap.parse_args()
     dst = Path(a.dst)
     dst.mkdir(parents=True, exist_ok=True)
     jobs = [(str(p), str(dst / p.name), a.size) for p in Path(a.src).rglob("*.png")]
     print(f"{len(jobs)} images -> {dst}")
-    with ProcessPoolExecutor(a.workers) as ex:
-        for i, _ in enumerate(ex.map(_one, jobs, chunksize=256)):
-            if i % 10000 == 0:
-                print(i)
+    t0 = time.time()
+    pool = ThreadPoolExecutor(a.threads) if a.threads else ProcessPoolExecutor(a.workers)
+    with pool as ex:
+        for i, _ in enumerate(ex.map(_one, jobs, chunksize=16 if a.threads else 256)):
+            if i % 5000 == 0:
+                print(i, f"{time.time() - t0:.0f}s", flush=True)
 
 
 if __name__ == "__main__":
