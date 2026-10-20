@@ -1,0 +1,11 @@
+# A1: baseline DenseNet121 + auxiliary 14-finding multi-task head (same recipe as baselines)
+name: a1_multitask
+multitask: true
+attention: none
+recipe: baseline
+image_size: 224
+batch_size: 64
+lr: 1.0e-4
+select: val_loss
+patience: 7
+epochs: 50

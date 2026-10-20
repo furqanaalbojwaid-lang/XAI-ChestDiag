@@ -25,7 +25,7 @@ import torch
 from .common import ensure_dir, get_device, index_images, load_config
 from .dataset import preprocess
 from .gradcam import GradCAM
-from .models import build_model, gradcam_target_layer
+from .proposed import load_trained
 
 
 def overlay(gray: np.ndarray, cam: np.ndarray, alpha=0.45) -> np.ndarray:
@@ -71,9 +71,9 @@ def main():
     else:
         cases = pick_cases(pred, args.findings, ec["threshold"])
 
-    model = build_model(args.model, pretrained=False, dropout=tc["dropout"]).to(device)
-    model.load_state_dict(torch.load(f"{run_dir}/best.pt", map_location=device))
-    engine = GradCAM(model, gradcam_target_layer(model, args.model))
+    model, layer, size = load_trained(run_dir, args.model, device, tc["dropout"])
+    size = size or pc["image_size"]
+    engine = GradCAM(model, layer)
     index = index_images(cfg["data"]["image_root"])
 
     n = len(cases)
@@ -81,7 +81,7 @@ def main():
     axes = np.atleast_2d(axes)
     records = []
     for i, (image, label) in enumerate(cases):
-        x, gray = preprocess(index[image], pc["image_size"], pc["imagenet_normalize"])
+        x, gray = preprocess(index[image], size, pc["imagenet_normalize"])
         cam, prob = engine(x.unsqueeze(0).to(device), target="abnormal")
         axes[i, 0].imshow(gray, cmap="gray")
         im = axes[i, 1].imshow(overlay(gray, cam[0]))
@@ -96,9 +96,9 @@ def main():
     cbar.set_label("Grad-CAM activation (normalised)")
 
     out = ensure_dir(f"{cfg['output_dir']}/figures")
-    fig.savefig(out / "fig_gradcam_cases.png", dpi=300, bbox_inches="tight")
-    fig.savefig(out / "fig_gradcam_cases.pdf", bbox_inches="tight")
-    pd.DataFrame(records).to_csv(out / "fig_gradcam_cases_images.csv", index=False)
+    fig.savefig(out / f"fig_gradcam_cases_{args.model}.png", dpi=300, bbox_inches="tight")
+    fig.savefig(out / f"fig_gradcam_cases_{args.model}.pdf", bbox_inches="tight")
+    pd.DataFrame(records).to_csv(out / f"fig_gradcam_cases_{args.model}_images.csv", index=False)
     print(pd.DataFrame(records).to_string(index=False))
 
 

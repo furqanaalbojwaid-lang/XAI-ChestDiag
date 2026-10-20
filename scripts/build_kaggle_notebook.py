@@ -199,7 +199,85 @@ def build_combine(out_name="kaggle_combine.ipynb"):
     print("wrote", out_name, len(cells), "cells")
 
 
+ABL_SANITY = """import sys, torch
+sys.path.insert(0, '.')
+from src.proposed import XAIChestNet, multilabel_targets
+from src.gradcam import GradCAM
+for att, mt in [('none', True), ('cbam', True)]:
+    net = XAIChestNet(pretrained=True, attention=att, multitask=mt).cuda()
+    x = torch.randn(2, 3, 224, 224).cuda()
+    b, a = net.forward_all(x); (b.sum() + a.sum()).backward()
+    layer = net.attn if att == 'cbam' else net.features.denseblock4
+    cam, p = GradCAM(net.eval(), layer)(x[:1])
+    print(att, mt, b.shape, a.shape, cam.shape, 'ok')
+print(multilabel_targets(['Effusion|Mass', 'No Finding']))"""
+
+
+def write_code_cells():
+    cells = []
+    files = sorted(glob.glob(str(ROOT / "src/*.py"))) + [str(ROOT / "configs/default.yaml")] + \
+        sorted(glob.glob(str(ROOT / "configs/ablation/*.yaml")))
+    for f in files:
+        rel = Path(f).relative_to(ROOT).as_posix()
+        body = open(f).read()
+        if body.strip():
+            cells.append(code(f"%%writefile {rel}\n" + body))
+    return cells
+
+
+def build_ablation(variants, resize, out_name, tta_for=()):
+    train = "for v in VARIANTS:\n" \
+            "    !python -m src.train_proposed --config configs/kaggle.yaml --variant configs/ablation/{v}.yaml --seed 42\n" \
+            "    !python -m src.evaluate --config configs/kaggle.yaml --model {v} --seed 42\n" \
+            "    if v in TTA_FOR:\n" \
+            "        !python -m src.evaluate --config configs/kaggle.yaml --model {v} --seed 42 --tta"
+    cells = [md("# XAI-ChestDiag - ablation of the proposed model\n\nInputs: NIH Chest X-rays. Accelerator: GPU T4 x2.\n"),
+             code(f"VARIANTS = {variants!r}\nTTA_FOR = {list(tta_for)!r}\nRESIZE = {resize}\nMODELS = []\nSEEDS = [42]"),
+             code("!nvidia-smi"),
+             code("import os\nos.makedirs('/kaggle/working/XAI-ChestDiag/src', exist_ok=True)\n"
+                  "os.makedirs('/kaggle/working/XAI-ChestDiag/configs/ablation', exist_ok=True)\n"
+                  "os.chdir('/kaggle/working/XAI-ChestDiag')")]
+    cells += write_code_cells()
+    cells += [code("open('src/__init__.py','w').close()"), code(CONFIG.replace("prev = [", "prev = [] and [")),
+              code(ABL_SANITY), code(RESIZE_CELL),
+              code("!python -m src.prepare_splits --config configs/kaggle.yaml"),
+              code(train),
+              code("!cd outputs && zip -qr ../results.zip . -x '*.pt'\n!rm -rf /kaggle/working/images_*\n!ls -la outputs/*/seed42")]
+    nb = {"cells": cells, "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+                                       "language_info": {"name": "python"}}, "nbformat": 4, "nbformat_minor": 5}
+    json.dump(nb, open(ROOT / "notebooks" / out_name, "w"), indent=1)
+    print("wrote", out_name, len(cells), "cells")
+
+
+FINAL_STEPS = """!python -m src.prepare_splits --config configs/kaggle.yaml
+!python -m src.final_report --config configs/kaggle.yaml --final a4_full_384
+for run in ['a4_full_384', 'densenet121']:
+    if os.path.exists(f'outputs/{run}/seed42/best.pt'):
+        !python -m src.pointing_game --config configs/kaggle.yaml --model {run} --seed 42
+!python -m src.gradcam_figure --config configs/kaggle.yaml --model a4_full_384 --seed 42 --findings Pneumonia Infiltration Effusion Consolidation
+!cp -r outputs /kaggle/working/final_outputs && find /kaggle/working/final_outputs -name '*.pt' -delete
+!cd /kaggle/working && zip -qr final_results.zip final_outputs
+from IPython.display import Image, display
+for f in sorted(glob.glob('outputs/figures/*.png')): print(f); display(Image(f, width=600))"""
+
+
+def build_final(out_name="kaggle_final.ipynb"):
+    cells = [md("# XAI-ChestDiag - final report (CPU)\n\nInputs: NIH Chest X-rays, Run1, Run2, Ablation A, Ablation B.\n"),
+             code("import os\nos.makedirs('/kaggle/working/XAI-ChestDiag/src', exist_ok=True)\n"
+                  "os.makedirs('/kaggle/working/XAI-ChestDiag/configs/ablation', exist_ok=True)\n"
+                  "os.chdir('/kaggle/working/XAI-ChestDiag')")]
+    cells += write_code_cells()
+    cells += [code("open('src/__init__.py','w').close()"), code(COMBINE_CONFIG), code(GATHER), code(FINAL_STEPS)]
+    nb = {"cells": cells, "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+                                       "language_info": {"name": "python"}}, "nbformat": 4, "nbformat_minor": 5}
+    json.dump(nb, open(ROOT / "notebooks" / out_name, "w"), indent=1)
+    print("wrote", out_name, len(cells), "cells")
+
+
 if __name__ == "__main__":
     build(["densenet121", "efficientnet_b4"], "kaggle_xai_chestdiag.ipynb", keep_cache=True)
     build(["vgg16", "inception_v3"], "kaggle_run2.ipynb", keep_cache=False)
     build_combine()
+    build_ablation(["a1_multitask", "a2_mt_cbam", "a3_mt_cbam_modern"], 256, "kaggle_ablation_A.ipynb")
+    build_ablation(["a4_full_384"], 384, "kaggle_ablation_B.ipynb", tta_for=["a4_full_384"])
+    build_final()

@@ -67,7 +67,8 @@ class Augmenter:
 
 class CXRDataset(Dataset):
     def __init__(self, df: pd.DataFrame, image_index: dict[str, str], size: int,
-                 imagenet_normalize: bool = True, augment: Augmenter | None = None):
+                 imagenet_normalize: bool = True, augment: Augmenter | None = None, multilabel: bool = False,
+                 hflip: bool = False):
         missing = [im for im in df["image"] if im not in image_index]
         if missing:
             raise FileNotFoundError(f"{len(missing)} images listed in the CSV were not found, e.g. {missing[:3]}")
@@ -76,6 +77,11 @@ class CXRDataset(Dataset):
         self.size = size
         self.norm = imagenet_normalize
         self.augment = augment
+        self.hflip = hflip  # deterministic flip, used for test-time augmentation
+        self.y14 = None
+        if multilabel:
+            from .proposed import multilabel_targets
+            self.y14 = multilabel_targets(df["findings"].values)
 
     def __len__(self):
         return len(self.paths)
@@ -85,5 +91,9 @@ class CXRDataset(Dataset):
         img = cv2.resize(img, (self.size, self.size), interpolation=cv2.INTER_AREA)
         if self.augment is not None:
             img = self.augment(img)
+        if self.hflip:
+            img = cv2.flip(img, 1)
         x = to_tensor(minmax(img), self.norm)
+        if self.y14 is not None:
+            return x, torch.tensor(self.labels[i]), torch.from_numpy(self.y14[i])
         return x, torch.tensor(self.labels[i])

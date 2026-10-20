@@ -1,0 +1,14 @@
+# A3: + modern recipe: AdamW, 1-epoch warm-up + cosine decay, EMA weights, model selection on val AUC
+name: a3_mt_cbam_modern
+multitask: true
+attention: cbam
+recipe: modern
+image_size: 224
+batch_size: 64
+lr: 2.0e-4
+weight_decay: 1.0e-4
+warmup_epochs: 1
+epochs: 15
+ema_decay: 0.999
+select: val_auc
+patience: 5

@@ -24,7 +24,7 @@ import torch
 from .common import ensure_dir, get_device, index_images, load_config
 from .dataset import preprocess
 from .gradcam import GradCAM
-from .models import build_model, gradcam_target_layer
+from .proposed import load_trained
 
 
 def load_bboxes(bbox_csv: str) -> pd.DataFrame:
@@ -63,11 +63,10 @@ def main():
     if boxes.empty:
         raise SystemExit("No bounding-box images in the selected split.")
 
-    model = build_model(args.model, pretrained=False, dropout=tc["dropout"]).to(device)
-    model.load_state_dict(torch.load(f"{run_dir}/best.pt", map_location=device))
-    cam_engine = GradCAM(model, gradcam_target_layer(model, args.model))
+    model, layer, size = load_trained(run_dir, args.model, device, tc["dropout"])
+    cam_engine = GradCAM(model, layer)
     index = index_images(cfg["data"]["image_root"])
-    size = pc["image_size"]
+    size = size or pc["image_size"]
 
     rows = []
     for image, grp in boxes.groupby("image"):
