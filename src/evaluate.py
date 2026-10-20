@@ -39,6 +39,19 @@ def predict(model, loader, device):
 
 
 def predict_df(model, df, index, size, norm, bs, nw, device, tta):
+    if device.type == "cuda":
+        from .dataset import gpu_preprocess, preload_images
+        arr = torch.from_numpy(preload_images([index[i] for i in df.image], size, max(8, 2 * nw)))
+        out = []
+        model.eval()
+        with torch.no_grad(), torch.autocast(device_type="cuda"):
+            for k in range(0, len(arr), bs):
+                xb = arr[k:k + bs].to(device)
+                p = torch.sigmoid(model(gpu_preprocess(xb, norm)).float())
+                if tta:
+                    p = (p + torch.sigmoid(model(gpu_preprocess(xb, norm, hflip_all=True)).float())) / 2
+                out.append(p.cpu().numpy())
+        return np.concatenate(out)
     dl = DataLoader(CXRDataset(df, index, size, norm), batch_size=bs, num_workers=nw, shuffle=False)
     p = predict(model, dl, device)
     if tta:

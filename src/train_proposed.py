@@ -32,7 +32,35 @@ DEFAULT_VARIANT = dict(
     recipe="baseline",          # "baseline" = Adam + ReduceLROnPlateau + early stop on val loss
     batch_size=64, lr=1e-4, weight_decay=0.0, epochs=50, patience=7,
     warmup_epochs=1, ema_decay=0.999, select="val_loss", dropout=0.3,
+    fast_data=True,             # preload images to RAM + GPU augmentation (CLAHE fixed per image)
 )
+
+
+class ArrayLoader:
+    """Iterates over a pre-loaded uint8 image array; batches are augmented on the GPU."""
+
+    def __init__(self, arr, labels, y14, bs, device, augment=None, norm=True, shuffle=False, seed=0, drop_last=False):
+        from .dataset import gpu_preprocess
+        self.arr, self.labels, self.y14 = torch.from_numpy(arr), torch.from_numpy(labels), \
+            (torch.from_numpy(y14) if y14 is not None else None)
+        self.bs, self.device, self.aug, self.norm = bs, device, augment, norm
+        self.shuffle, self.drop_last, self.pre = shuffle, drop_last, gpu_preprocess
+        self.g = torch.Generator().manual_seed(seed)
+
+    def __len__(self):
+        n = len(self.arr)
+        return n // self.bs if self.drop_last else math.ceil(n / self.bs)
+
+    def __iter__(self):
+        n = len(self.arr)
+        idx = torch.randperm(n, generator=self.g) if self.shuffle else torch.arange(n)
+        for k in range(len(self)):
+            j = idx[k * self.bs:(k + 1) * self.bs]
+            x = self.pre(self.arr[j].to(self.device, non_blocking=True), self.norm, self.aug)
+            out = [x, self.labels[j].to(self.device)]
+            if self.y14 is not None:
+                out.append(self.y14[j].to(self.device))
+            yield out
 
 
 class EMA:
@@ -88,13 +116,27 @@ def main():
     tr_df, va_df = pd.read_csv(f"{split_dir}/train.csv"), pd.read_csv(f"{split_dir}/val.csv")
     index = index_images(cfg["data"]["image_root"])
     norm = cfg["preprocessing"]["imagenet_normalize"]
-    tr_ds = CXRDataset(tr_df, index, v["image_size"], norm, Augmenter(cfg["augmentation"]), multilabel=v["multitask"])
-    va_ds = CXRDataset(va_df, index, v["image_size"], norm)
     nw = cfg["training"]["num_workers"]
-    g = torch.Generator().manual_seed(args.seed)
-    tr_dl = DataLoader(tr_ds, batch_size=v["batch_size"], shuffle=True, num_workers=nw, pin_memory=True,
-                       drop_last=True, generator=g, persistent_workers=nw > 0)
-    va_dl = DataLoader(va_ds, batch_size=v["batch_size"], shuffle=False, num_workers=nw, pin_memory=True)
+    if v["fast_data"] and device.type == "cuda":
+        from .dataset import preload_images
+        from .proposed import multilabel_targets
+        aug = cfg["augmentation"]
+        t1 = time.time()
+        tr_arr = preload_images([index[i] for i in tr_df.image], v["image_size"], max(8, 2 * nw),
+                                clahe_p=aug["clahe_p"], clahe_cfg=aug, seed=args.seed)
+        va_arr = preload_images([index[i] for i in va_df.image], v["image_size"], max(8, 2 * nw))
+        print(f"preloaded {len(tr_arr)} + {len(va_arr)} images in {time.time() - t1:.0f} s", flush=True)
+        tr_dl = ArrayLoader(tr_arr, tr_df.label.values.astype(np.float32),
+                            multilabel_targets(tr_df.findings.values) if v["multitask"] else None,
+                            v["batch_size"], device, augment=aug, norm=norm, shuffle=True, seed=args.seed, drop_last=True)
+        va_dl = ArrayLoader(va_arr, va_df.label.values.astype(np.float32), None, v["batch_size"], device, norm=norm)
+    else:
+        tr_ds = CXRDataset(tr_df, index, v["image_size"], norm, Augmenter(cfg["augmentation"]), multilabel=v["multitask"])
+        va_ds = CXRDataset(va_df, index, v["image_size"], norm)
+        g = torch.Generator().manual_seed(args.seed)
+        tr_dl = DataLoader(tr_ds, batch_size=v["batch_size"], shuffle=True, num_workers=nw, pin_memory=True,
+                           drop_last=True, generator=g, persistent_workers=nw > 0)
+        va_dl = DataLoader(va_ds, batch_size=v["batch_size"], shuffle=False, num_workers=nw, pin_memory=True)
 
     model = XAIChestNet(pretrained=True, attention=v["attention"], multitask=v["multitask"],
                         dropout=v["dropout"]).to(device)
@@ -119,8 +161,10 @@ def main():
     t0 = time.time()
     for epoch in range(1, epochs + 1):
         model.train()
-        tl, n = 0.0, 0
-        for batch in tr_dl:
+        tl, n, te = 0.0, 0, time.time()
+        for step, batch in enumerate(tr_dl):
+            if step == 50:
+                print(f"  epoch {epoch}: ~{(time.time() - te) / 50 * len(tr_dl) / 60:.1f} min/epoch (estimated)", flush=True)
             x, y = batch[0].to(device, non_blocking=True), batch[1].to(device, non_blocking=True)
             with torch.autocast(device_type=device.type, enabled=amp):
                 logit, aux = model.forward_all(x)
@@ -143,8 +187,8 @@ def main():
         lr = opt.param_groups[0]["lr"]
         hist.append(dict(epoch=epoch, train_loss=tl / n, val_loss=vl, val_auc=vauc, val_acc=vacc, lr=lr))
         pd.DataFrame(hist).to_csv(out_dir / "history.csv", index=False)
-        print(f"epoch {epoch:03d} | train {tl / n:.4f} | val loss {vl:.4f} auc {vauc:.4f} acc {vacc:.4f} | lr {lr:.2e}",
-              flush=True)
+        print(f"epoch {epoch:03d} | train {tl / n:.4f} | val loss {vl:.4f} auc {vauc:.4f} acc {vacc:.4f} | lr {lr:.2e}"
+              f" | {(time.time() - te) / 60:.1f} min", flush=True)
         score = -vl if v["select"] == "val_loss" else vauc
         if score > best + 1e-6:
             best, best_epoch, wait = score, epoch, 0

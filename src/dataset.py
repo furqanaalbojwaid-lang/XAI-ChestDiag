@@ -97,3 +97,61 @@ class CXRDataset(Dataset):
         if self.y14 is not None:
             return x, torch.tensor(self.labels[i]), torch.from_numpy(self.y14[i])
         return x, torch.tensor(self.labels[i])
+
+
+# ----------------------------------------------------------------------------- fast path
+# Pre-load all images once into a uint8 array (threaded decode) and run the
+# augmentation on the GPU. Avoids per-epoch PNG decoding when CPUs are slow.
+def preload_images(paths, size: int, workers: int = 8, clahe_p: float = 0.0, clahe_cfg: dict | None = None,
+                   seed: int = 0) -> np.ndarray:
+    """Return N x size x size uint8. If clahe_p > 0, CLAHE is applied to a random
+    (seeded) fraction clahe_p of the images at load time."""
+    from concurrent.futures import ThreadPoolExecutor
+    rng = np.random.default_rng(seed)
+    use_clahe = rng.random(len(paths)) < clahe_p
+    cfg = clahe_cfg or {"clahe_clip_limit": 2.0, "clahe_tile_grid": 8}
+
+    def load(i):
+        img = cv2.resize(read_gray(paths[i]), (size, size), interpolation=cv2.INTER_AREA)
+        if use_clahe[i]:
+            img = cv2.createCLAHE(clipLimit=cfg["clahe_clip_limit"],
+                                  tileGridSize=(cfg["clahe_tile_grid"], cfg["clahe_tile_grid"])).apply(img)
+        return img
+
+    out = np.empty((len(paths), size, size), dtype=np.uint8)
+    with ThreadPoolExecutor(workers) as ex:
+        for i, img in enumerate(ex.map(load, range(len(paths)), chunksize=64)):
+            out[i] = img
+            if i % 20000 == 0:
+                print(f"  preloaded {i}/{len(paths)}", flush=True)
+    return out
+
+
+def gpu_preprocess(xb_uint8, imagenet_normalize: bool = True, augment: dict | None = None, hflip_all: bool = False):
+    """xb_uint8: (B,H,W) uint8 tensor on the GPU -> (B,3,H,W) float tensor.
+    Same steps as the CPU pipeline: [affine rotation/zoom + h-flip] -> min-max -> ImageNet norm."""
+    import math
+    import torch.nn.functional as F
+    x = xb_uint8.float().unsqueeze(1) / 255.0
+    b = x.shape[0]
+    if augment is not None:
+        ang = (torch.rand(b, device=x.device) * 2 - 1) * math.radians(augment["rotation_deg"])
+        sc = 1 + (torch.rand(b, device=x.device) * 2 - 1) * augment["zoom"]
+        cos, sin = torch.cos(ang) / sc, torch.sin(ang) / sc
+        theta = torch.stack([torch.stack([cos, -sin, torch.zeros_like(cos)], 1),
+                             torch.stack([sin, cos, torch.zeros_like(cos)], 1)], 1)
+        grid = F.affine_grid(theta, x.shape, align_corners=False)
+        x = F.grid_sample(x, grid, mode="bilinear", padding_mode="zeros", align_corners=False)
+        flip = torch.rand(b, device=x.device) < augment["hflip_p"]
+        x = torch.where(flip[:, None, None, None], x.flip(-1), x)
+    if hflip_all:
+        x = x.flip(-1)
+    lo = x.amin(dim=(2, 3), keepdim=True)
+    hi = x.amax(dim=(2, 3), keepdim=True)
+    x = (x - lo) / (hi - lo + 1e-8)
+    x = x.repeat(1, 3, 1, 1)
+    if imagenet_normalize:
+        mean = torch.tensor(IMAGENET_MEAN, device=x.device).view(1, 3, 1, 1)
+        std = torch.tensor(IMAGENET_STD, device=x.device).view(1, 3, 1, 1)
+        x = (x - mean) / std
+    return x
