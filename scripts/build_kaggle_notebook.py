@@ -225,6 +225,47 @@ def write_code_cells():
     return cells
 
 
+CACHE_FROM_INPUT = """# Reuse a pre-built image cache (zip in an attached input) instead of resizing 112k images again
+import zipfile, time
+t0 = time.time()
+os.makedirs(IMG, exist_ok=True)
+if len(os.listdir(IMG)) < 112120:
+    zips = []
+    for root, dirs, files in os.walk('/kaggle/input', followlinks=True):
+        dirs[:] = [d for d in dirs if not d.startswith('images')]
+        zips += [os.path.join(root, f) for f in files if f.endswith('.zip')]
+    print('zips found:', zips)
+    for z in zips:
+        zf = zipfile.ZipFile(z)
+        names = [n for n in zf.namelist() if f'images_{RESIZE}/' in n and n.endswith('.png')]
+        print(z, len(names), 'cached images')
+        if len(names) >= 112120:
+            for i, n in enumerate(names):
+                with zf.open(n) as src, open(os.path.join(IMG, os.path.basename(n)), 'wb') as dst:
+                    shutil.copyfileobj(src, dst)
+                if i % 20000 == 0: print(i, round(time.time() - t0), 's', flush=True)
+            break
+print(len(os.listdir(IMG)), 'images in cache', round(time.time() - t0), 's')"""
+
+
+def build_cache(resize, out_name):
+    cells = [md(f"# XAI-ChestDiag - build {resize}px image cache (CPU only, no GPU quota)\n\nInput: NIH Chest X-rays. Output: images_{resize}.zip\n"),
+             code(f"RESIZE = {resize}"),
+             code("import os\nos.makedirs('/kaggle/working/XAI-ChestDiag/src', exist_ok=True)\nos.chdir('/kaggle/working/XAI-ChestDiag')"),
+             code("%%writefile src/resize_cache.py\n" + open(ROOT / "src/resize_cache.py").read()),
+             code("open('src/__init__.py','w').close()\nimport glob\n"
+                  "hits = glob.glob('/kaggle/input/**/Data_Entry_2017.csv', recursive=True)\n"
+                  "NIH = os.path.dirname(sorted(hits, key=len)[0]); IMG = f'/tmp/images_{RESIZE}'\nprint(NIH)"),
+             code("!python -m src.resize_cache --src {NIH} --dst {IMG} --size {RESIZE} --workers {os.cpu_count()}"),
+             code("import zipfile\nn = 0\nwith zipfile.ZipFile(f'/kaggle/working/images_{RESIZE}.zip', 'w', zipfile.ZIP_STORED) as z:\n"
+                  "    for f in sorted(os.listdir(IMG)):\n        z.write(os.path.join(IMG, f), f'images_{RESIZE}/{f}'); n += 1\n"
+                  "print(n, 'images zipped')\n!ls -la /kaggle/working")]
+    nb = {"cells": cells, "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+                                       "language_info": {"name": "python"}}, "nbformat": 4, "nbformat_minor": 5}
+    json.dump(nb, open(ROOT / "notebooks" / out_name, "w"), indent=1)
+    print("wrote", out_name, len(cells), "cells")
+
+
 def build_ablation(variants, resize, out_name, tta_for=()):
     train = "for v in VARIANTS:\n" \
             "    !python -m src.train_proposed --config configs/kaggle.yaml --variant configs/ablation/{v}.yaml --seed 42\n" \
@@ -239,7 +280,7 @@ def build_ablation(variants, resize, out_name, tta_for=()):
                   "os.chdir('/kaggle/working/XAI-ChestDiag')")]
     cells += write_code_cells()
     cells += [code("open('src/__init__.py','w').close()"), code(CONFIG.replace("prev = [", "prev = [] and [")),
-              code(ABL_SANITY), code(RESIZE_CELL),
+              code(ABL_SANITY), code(CACHE_FROM_INPUT), code(RESIZE_CELL),
               code("!python -m src.prepare_splits --config configs/kaggle.yaml"),
               code(train),
               code("!cd outputs && zip -qr ../results.zip . -x '*.pt'\n!rm -rf /kaggle/working/images_*\n!ls -la outputs/*/seed42")]
@@ -281,3 +322,4 @@ if __name__ == "__main__":
     build_ablation(["a1_multitask", "a2_mt_cbam", "a3_mt_cbam_modern"], 256, "kaggle_ablation_A.ipynb")
     build_ablation(["a4_full_384"], 384, "kaggle_ablation_B.ipynb", tta_for=["a4_full_384"])
     build_final()
+    build_cache(384, "kaggle_cache_384.ipynb")
