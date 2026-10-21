@@ -1,0 +1,12 @@
+{
+  "model": "a4_full_384",
+  "seed": 42,
+  "tolerance_px": 15.0,
+  "images": 175,
+  "boxes": 206,
+  "hits": 93,
+  "misses": 113,
+  "pointing_accuracy": 0.45145631067961167,
+  "centre_baseline_accuracy": 0.23786407766990292,
+  "test_split_only": true
+}

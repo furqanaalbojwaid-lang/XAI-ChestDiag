@@ -1,0 +1,82 @@
+[
+  {
+    "model": "densenet121",
+    "parameters_M": 6.95,
+    "batch_size": 1,
+    "images_per_sec": 51.7,
+    "ms_per_image": 19.345,
+    "device": "cuda",
+    "gpu": "Tesla T4",
+    "amp": true
+  },
+  {
+    "model": "densenet121",
+    "parameters_M": 6.95,
+    "batch_size": 64,
+    "images_per_sec": 713.9,
+    "ms_per_image": 1.401,
+    "device": "cuda",
+    "gpu": "Tesla T4",
+    "amp": true
+  },
+  {
+    "model": "vgg16",
+    "parameters_M": 14.72,
+    "batch_size": 1,
+    "images_per_sec": 254.8,
+    "ms_per_image": 3.924,
+    "device": "cuda",
+    "gpu": "Tesla T4",
+    "amp": true
+  },
+  {
+    "model": "vgg16",
+    "parameters_M": 14.72,
+    "batch_size": 64,
+    "images_per_sec": 397.9,
+    "ms_per_image": 2.513,
+    "device": "cuda",
+    "gpu": "Tesla T4",
+    "amp": true
+  },
+  {
+    "model": "inception_v3",
+    "parameters_M": 21.79,
+    "batch_size": 1,
+    "images_per_sec": 69.8,
+    "ms_per_image": 14.322,
+    "device": "cuda",
+    "gpu": "Tesla T4",
+    "amp": true
+  },
+  {
+    "model": "inception_v3",
+    "parameters_M": 21.79,
+    "batch_size": 64,
+    "images_per_sec": 1010.7,
+    "ms_per_image": 0.989,
+    "device": "cuda",
+    "gpu": "Tesla T4",
+    "amp": true
+  },
+  {
+    "model": "efficientnet_b4",
+    "parameters_M": 17.55,
+    "batch_size": 1,
+    "images_per_sec": 45.1,
+    "ms_per_image": 22.17,
+    "device": "cuda",
+    "gpu": "Tesla T4",
+    "amp": true
+  },
+  {
+    "model": "efficientnet_b4",
+    "parameters_M": 17.55,
+    "batch_size": 64,
+    "images_per_sec": 594.1,
+    "ms_per_image": 1.683,
+    "device": "cuda",
+    "gpu": "Tesla T4",
+    "amp": true
+  }
+]
