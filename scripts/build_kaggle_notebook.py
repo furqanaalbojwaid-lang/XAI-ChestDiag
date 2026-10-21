@@ -329,6 +329,22 @@ def build_final(out_name="kaggle_final.ipynb"):
     print("wrote", out_name, len(cells), "cells")
 
 
+def build_throughput(out_name="kaggle_throughput.ipynb"):
+    cells = [md("# XAI-ChestDiag - inference throughput (GPU T4, no data needed)\n"),
+             code("!nvidia-smi"),
+             code("import os\nos.makedirs('/kaggle/working/XAI-ChestDiag/src', exist_ok=True)\n"
+                  "os.makedirs('/kaggle/working/XAI-ChestDiag/configs/ablation', exist_ok=True)\n"
+                  "os.chdir('/kaggle/working/XAI-ChestDiag')")]
+    cells += write_code_cells()
+    cells += [code("open('src/__init__.py','w').close()"),
+              code("!python -m src.throughput --config configs/default.yaml --batch-sizes 1 64 --amp --proposed "
+                   "--out throughput_with_proposed.json\n!cat outputs/summary/throughput_with_proposed.json")]
+    nb = {"cells": cells, "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+                                       "language_info": {"name": "python"}}, "nbformat": 4, "nbformat_minor": 5}
+    json.dump(nb, open(ROOT / "notebooks" / out_name, "w"), indent=1)
+    print("wrote", out_name, len(cells), "cells")
+
+
 if __name__ == "__main__":
     build(["densenet121", "efficientnet_b4"], "kaggle_xai_chestdiag.ipynb", keep_cache=True)
     build(["vgg16", "inception_v3"], "kaggle_run2.ipynb", keep_cache=False)
@@ -338,3 +354,4 @@ if __name__ == "__main__":
     build_ablation(["a5_xrv_384"], 384, "kaggle_ablation_C.ipynb", tta_for=["a5_xrv_384"], pre=[XRV_SETUP])
     build_final()
     build_cache(384, "kaggle_cache_384.ipynb")
+    build_throughput()
