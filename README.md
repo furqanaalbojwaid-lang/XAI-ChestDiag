@@ -1,5 +1,7 @@
 # XAI-ChestDiag
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23570883.svg)](https://doi.org/10.5281/zenodo.23570883)
+
 **Explainable deep learning for emergency triaging of pulmonary diseases from chest X-rays using DenseNet121 and Grad-CAM.**
 
 This repository contains the complete, reproducible experimental pipeline for the paper
