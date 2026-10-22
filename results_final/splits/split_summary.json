@@ -1,0 +1,30 @@
+{
+  "train": {
+    "images": 78935,
+    "patients": 21564,
+    "abnormal": 36526,
+    "normal": 42409,
+    "image_fraction": 0.704
+  },
+  "val": {
+    "images": 11341,
+    "patients": 3080,
+    "abnormal": 5211,
+    "normal": 6130,
+    "image_fraction": 0.1012
+  },
+  "test": {
+    "images": 21844,
+    "patients": 6161,
+    "abnormal": 10022,
+    "normal": 11822,
+    "image_fraction": 0.1948
+  },
+  "total": {
+    "images": 112120,
+    "patients": 30805,
+    "abnormal": 51759,
+    "normal": 60361
+  },
+  "patient_overlap_between_splits": 0
+}
